@@ -21,7 +21,10 @@ class LogFilter:
     ) -> None:
         self.start = start
         self.end = end
-        self.pattern = re.compile(pattern) if pattern else None
+        try:
+            self.pattern = re.compile(pattern) if pattern else None
+        except re.error as exc:
+            raise ValueError(f"Invalid regex pattern {pattern!r}: {exc}") from exc
         self.level = level.upper() if level else None
 
     def matches(self, record: LogRecord) -> bool:
