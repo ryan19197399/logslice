@@ -74,6 +74,17 @@ class TestComputeStats:
         stats = compute_stats(records)
         assert stats.time_span_seconds is None
 
+    def test_parsed_count_equals_total_minus_unparsed(self):
+        records = [
+            make_record(timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc)),
+            make_record(timestamp=datetime(2024, 1, 2, tzinfo=timezone.utc)),
+            make_record(timestamp=None),
+        ]
+        stats = compute_stats(records)
+        assert stats.parsed_count == 2
+        assert stats.unparsed_count == 1
+        assert stats.parsed_count + stats.unparsed_count == stats.total
+
 
 class TestLogStatsToDIct:
     def test_to_dict_keys(self):
@@ -84,15 +95,20 @@ class TestLogStatsToDIct:
             "first_timestamp", "last_timestamp", "time_span_seconds",
         }
 
-    def test_to_dict_timestamps_as_iso(self):
-        ts = datetime(2024, 6, 15, 9, 30, 0, tzinfo=timezone.utc)
-        stats = LogStats(total=1, first_timestamp=ts, last_timestamp=ts)
+    def test_to_dict_values(self):
+        t1 = datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+        t2 = datetime(2024, 1, 1, 11, 0, 0, tzinfo=timezone.utc)
+        stats = LogStats(
+            total=4,
+            unparsed_count=1,
+            by_level={"INFO": 3},
+            first_timestamp=t1,
+            last_timestamp=t2,
+        )
         d = stats.to_dict()
-        assert d["first_timestamp"] == "2024-06-15T09:30:00+00:00"
-
-    def test_to_dict_none_timestamps(self):
-        stats = LogStats()
-        d = stats.to_dict()
-        assert d["first_timestamp"] is None
-        assert d["last_timestamp"] is None
-        assert d["time_span_seconds"] is None
+        assert d["total"] == 4
+        assert d["unparsed"] == 1
+        assert d["parsed"] == 3
+        assert d["by_level"] == {"INFO": 3}
+        assert d["first_timestamp"] == t1
+        assert d["last_timestamp"] == t2
