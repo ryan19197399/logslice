@@ -40,6 +40,13 @@ class TestSorterWithParsedRecords:
         expected_order = ["DEBUG", "INFO", "WARNING", "ERROR"]
         assert levels == expected_order
 
+    def test_sort_by_level_desc_severity(self):
+        records = parsed_records()
+        result = sort_records(records, key="level", order="desc")
+        levels = [r.level.upper() for r in result if r.level]
+        expected_order = ["ERROR", "WARNING", "INFO", "DEBUG"]
+        assert levels == expected_order
+
     def test_sort_by_message_asc(self):
         records = parsed_records()
         result = sort_records(records, key="message", order="asc")
@@ -57,4 +64,4 @@ class TestSorterWithParsedRecords:
             LogRecord(timestamp=ts, level="INFO", message="second", raw="second"),
         ]
         result = sort_records(records, key="level", order="asc")
-        assert result.count == 2
+        assert len(result) == 2
