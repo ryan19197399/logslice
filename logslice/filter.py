@@ -45,6 +45,15 @@ class LogFilter:
             if self.matches(record):
                 yield record
 
+    def is_empty(self) -> bool:
+        """Return True if no filters are configured (all records will match)."""
+        return (
+            self.start is None
+            and self.end is None
+            and self.pattern is None
+            and self.level is None
+        )
+
 
 def filter_records(
     records: Iterable[LogRecord],
