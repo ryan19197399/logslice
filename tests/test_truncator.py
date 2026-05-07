@@ -83,26 +83,25 @@ class TestTruncateRecords:
 
     def test_original_record_fields_preserved(self):
         record = LogRecord(timestamp=None, level="ERROR", message="x" * 50, raw="raw")
-        result = truncate_records([record], max_length=10)
+        result = truncate_records([record], max_length=20)
         out = result.records[0]
         assert out.level == "ERROR"
         assert out.raw == "raw"
         assert out.timestamp is None
 
-    def test_none_message_passes_through(self):
-        record = make_record(None)
+    def test_none_message_record_not_truncated(self):
+        """Records with a None message should pass through without error."""
+        record = make_record(message=None)
         result = truncate_records([record], max_length=10)
         assert result.truncated_count == 0
         assert result.records[0].message is None
 
-    def test_mixed_records_counted_correctly(self):
-        records = [
-            make_record("short"),
-            make_record("x" * 300),
-            make_record("also short"),
-            make_record("y" * 300),
-        ]
-        result = truncate_records(records, max_length=50)
-        assert result.total_input == 4
-        assert result.truncated_count == 2
-        assert result.unchanged_count == 2
+    def test_mixed_records_counts_are_accurate(self):
+        """truncated_count and unchanged_count must sum to total_input."""
+        short = make_record("hi")
+        long = make_record("z" * 100)
+        result = truncate_records([short, long], max_length=20)
+        assert result.total_input == 2
+        assert result.truncated_count == 1
+        assert result.unchanged_count == 1
+        assert result.truncated_count + result.unchanged_count == result.total_input
