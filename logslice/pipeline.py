@@ -1,38 +1,45 @@
-"""End-to-end pipeline that chains all processing stages."""
+"""End-to-end processing pipeline for log records."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Iterable, List, Optional
 
-from logslice.parser import LogRecord
-from logslice.filter import LogFilter, filter_records
+from logslice.annotator import AnnotationRule, annotate_records
+from logslice.classifier import ClassificationResult, ClassificationRule, classify_records
 from logslice.deduplicator import deduplicate
+from logslice.filter import LogFilter
 from logslice.normalizer import normalise_records
+from logslice.parser import LogRecord
 from logslice.redactor import RedactionRule, redact_records
-from logslice.tagger import TagRule, tag_records
-from logslice.sorter import sort_records
+from logslice.sampler import sample_records
+from logslice.sorter import SortField, SortOrder, sort_records
 from logslice.truncator import truncate_records
 
 
 @dataclass
 class PipelineConfig:
-    start: Optional[datetime] = None
-    end: Optional[datetime] = None
-    patterns: List[str] = field(default_factory=list)
+    """Configuration driving :func:`run_pipeline`."""
+
+    log_filter: Optional[LogFilter] = None
     deduplicate: bool = False
-    normalise_levels: bool = True
+    normalise_levels: bool = False
     redaction_rules: List[RedactionRule] = field(default_factory=list)
-    tag_rules: List[TagRule] = field(default_factory=list)
-    sort_by: str = "timestamp"
-    ascending: bool = True
-    max_message_length: Optional[int] = None
+    annotation_rules: List[AnnotationRule] = field(default_factory=list)
+    classification_rules: List[ClassificationRule] = field(default_factory=list)
+    multi_label_classification: bool = False
+    truncate_at: Optional[int] = None
+    sample_nth: Optional[int] = None
+    sample_fraction: Optional[float] = None
+    sort_field: Optional[SortField] = None
+    sort_order: SortOrder = SortOrder.ASC
 
 
 @dataclass
 class PipelineResult:
+    """Aggregated output produced by :func:`run_pipeline`."""
+
     records: List[LogRecord] = field(default_factory=list)
-    stats: dict = field(default_factory=dict)
+    classification: Optional[ClassificationResult] = None
 
     @property
     def count(self) -> int:
@@ -43,52 +50,52 @@ def run_pipeline(
     records: Iterable[LogRecord],
     config: PipelineConfig,
 ) -> PipelineResult:
-    """Run *records* through every configured processing stage."""
+    """Apply the processing steps described by *config* to *records*.
+
+    Steps are applied in a fixed, deterministic order:
+    filter → deduplicate → normalise → redact → annotate → truncate
+    → sample → sort → classify.
+    """
     items: List[LogRecord] = list(records)
-    stats: dict = {"input_count": len(items)}
 
-    # Normalise levels first so filters work on canonical values
-    if config.normalise_levels:
-        norm = normalise_records(items)
-        items = norm.records
-        stats["normalised"] = norm.changed_count
+    if config.log_filter and not config.log_filter.is_empty():
+        items = list(config.log_filter.apply(items))
 
-    # Filter by time range and patterns
-    log_filter = LogFilter(
-        start=config.start,
-        end=config.end,
-        patterns=config.patterns or None,
-    )
-    items = list(filter_records(items, log_filter))
-    stats["after_filter"] = len(items)
-
-    # Deduplication
     if config.deduplicate:
-        dedup = deduplicate(items)
-        items = dedup.records
-        stats["duplicates_dropped"] = dedup.total_dropped
+        items = list(deduplicate(items).records)
 
-    # Redaction
+    if config.normalise_levels:
+        items = list(normalise_records(items).records)
+
     if config.redaction_rules:
-        red = redact_records(items, config.redaction_rules)
-        items = red.records
-        stats["redacted"] = red.redacted_count
+        items = list(redact_records(items, config.redaction_rules).records)
 
-    # Tagging
-    if config.tag_rules:
-        tagged = tag_records(items, config.tag_rules)
-        items = tagged.records
-        stats["tag_counts"] = tagged.tag_counts
+    if config.annotation_rules:
+        items = list(annotate_records(items, config.annotation_rules).records)
 
-    # Truncation
-    if config.max_message_length is not None:
-        trunc = truncate_records(items, config.max_message_length)
-        items = trunc.records
-        stats["truncated"] = trunc.truncated_count
+    if config.truncate_at is not None:
+        items = list(truncate_records(items, config.truncate_at).records)
 
-    # Sort
-    sorted_result = sort_records(items, by=config.sort_by, ascending=config.ascending)
-    items = list(sorted_result)
+    if config.sample_nth is not None or config.sample_fraction is not None:
+        items = list(
+            sample_records(
+                items,
+                nth=config.sample_nth,
+                fraction=config.sample_fraction,
+            ).records
+        )
 
-    stats["output_count"] = len(items)
-    return PipelineResult(records=items, stats=stats)
+    if config.sort_field is not None:
+        items = list(
+            sort_records(items, by=config.sort_field, order=config.sort_order).records
+        )
+
+    classification: Optional[ClassificationResult] = None
+    if config.classification_rules:
+        classification = classify_records(
+            items,
+            config.classification_rules,
+            multi_label=config.multi_label_classification,
+        )
+
+    return PipelineResult(records=items, classification=classification)
