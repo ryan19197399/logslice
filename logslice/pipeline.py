@@ -1,4 +1,5 @@
-"""Pipeline module: orchestrate the full logslice processing chain."""
+"""End-to-end processing pipeline for log records."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -9,14 +10,14 @@ from logslice.deduplicator import deduplicate
 from logslice.filter import LogFilter, filter_records
 from logslice.parser import LogRecord
 from logslice.redactor import RedactionRule, redact_records
-from logslice.sampler import SampleResult, sample_records
-from logslice.sorter import SortResult, sort_records
+from logslice.sampler import sample_records
+from logslice.sorter import sort_records
 from logslice.truncator import truncate_records
 
 
 @dataclass
 class PipelineConfig:
-    """Configuration for a single pipeline run."""
+    """Configuration controlling which pipeline stages are active."""
 
     log_filter: Optional[LogFilter] = None
     deduplicate: bool = False
@@ -24,20 +25,17 @@ class PipelineConfig:
     sort_ascending: bool = True
     sample_nth: Optional[int] = None
     sample_fraction: Optional[float] = None
-    max_message_length: Optional[int] = None
+    truncate_length: Optional[int] = None
     redaction_rules: List[RedactionRule] = field(default_factory=list)
     annotation_rules: List[AnnotationRule] = field(default_factory=list)
 
 
 @dataclass
 class PipelineResult:
-    """Result returned after running the pipeline."""
+    """Holds the records produced by the pipeline plus basic metadata."""
 
     records: List[LogRecord] = field(default_factory=list)
-    dropped_duplicates: int = 0
-    dropped_samples: int = 0
-    redacted_count: int = 0
-    annotated_count: int = 0
+    stages_applied: List[str] = field(default_factory=list)
 
     @property
     def count(self) -> int:
@@ -48,56 +46,55 @@ def run_pipeline(
     records: Iterable[LogRecord],
     config: PipelineConfig,
 ) -> PipelineResult:
-    """Run *records* through the processing stages defined in *config*."""
+    """Run *records* through the stages described by *config*.
+
+    Stages are applied in a fixed, deterministic order:
+    filter -> deduplicate -> redact -> annotate -> sort -> sample -> truncate.
+    """
     result = PipelineResult()
+    current: Iterable[LogRecord] = records
 
-    record_list: List[LogRecord] = list(records)
-
-    # 1. Filter by time range / pattern
     if config.log_filter is not None:
-        record_list = list(filter_records(record_list, config.log_filter))
+        current = filter_records(current, config.log_filter)
+        result.stages_applied.append("filter")
 
-    # 2. Deduplicate
     if config.deduplicate:
-        dedup = deduplicate(record_list)
-        record_list = list(dedup.records)
-        result.dropped_duplicates = dedup.total_dropped
+        dedup = deduplicate(current)
+        current = iter(dedup.records)
+        result.stages_applied.append("deduplicate")
 
-    # 3. Redact sensitive data
     if config.redaction_rules:
-        redacted = redact_records(record_list, config.redaction_rules)
-        record_list = list(redacted.records)
-        result.redacted_count = redacted.redacted_count
+        redacted = redact_records(list(current), config.redaction_rules)
+        current = iter(redacted.records)
+        result.stages_applied.append("redact")
 
-    # 4. Annotate with tags
     if config.annotation_rules:
-        annotated = annotate_records(record_list, config.annotation_rules)
-        record_list = annotated.records
-        result.annotated_count = annotated.annotated_count
+        annotated = annotate_records(list(current), config.annotation_rules)
+        current = iter(annotated.records)
+        result.stages_applied.append("annotate")
 
-    # 5. Truncate long messages
-    if config.max_message_length is not None:
-        trunc = truncate_records(record_list, config.max_message_length)
-        record_list = list(trunc.records)
-
-    # 6. Sort
     if config.sort_by is not None:
-        sorted_result: SortResult = sort_records(
-            record_list,
+        sorted_result = sort_records(
+            list(current),
             by=config.sort_by,
             ascending=config.sort_ascending,
         )
-        record_list = list(sorted_result)
+        current = iter(sorted_result)
+        result.stages_applied.append("sort")
 
-    # 7. Sample
     if config.sample_nth is not None or config.sample_fraction is not None:
-        sampled: SampleResult = sample_records(
-            record_list,
-            every_nth=config.sample_nth,
+        sampled = sample_records(
+            list(current),
+            nth=config.sample_nth,
             fraction=config.sample_fraction,
         )
-        result.dropped_samples = sampled.dropped
-        record_list = list(sampled.records)
+        current = iter(sampled.records)
+        result.stages_applied.append("sample")
 
-    result.records = record_list
+    if config.truncate_length is not None:
+        truncated = truncate_records(list(current), max_length=config.truncate_length)
+        current = iter(truncated.records)
+        result.stages_applied.append("truncate")
+
+    result.records = list(current)
     return result
