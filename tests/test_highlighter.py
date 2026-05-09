@@ -28,6 +28,11 @@ class TestHighlightRule:
         rule = HighlightRule(pattern="error")
         assert rule.regex.search("ERROR")
 
+    def test_invalid_pattern_raises(self):
+        """An invalid regex pattern should raise a descriptive error."""
+        with pytest.raises(re.error):
+            HighlightRule(pattern="[unclosed", colour="red")
+
 
 class TestHighlighter:
     def test_no_rules_returns_original(self):
@@ -70,6 +75,12 @@ class TestHighlighter:
         h.add_rule("error")
         result = h.highlight("everything is fine")
         assert result == "everything is fine"
+
+    def test_highlight_lines_empty_input(self):
+        """highlight_lines should return an empty list for empty input."""
+        h = Highlighter()
+        h.add_rule("error", "red")
+        assert h.highlight_lines([]) == []
 
 
 class TestMakeHighlighter:
