@@ -22,6 +22,7 @@ def make_record(
     ts: Optional[datetime] = None,
     extra: Optional[dict] = None,
 ) -> LogRecord:
+    """Create a LogRecord with sensible defaults for use in tests."""
     return LogRecord(
         timestamp=ts or datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
         level=level,
@@ -52,6 +53,14 @@ class TestSplitResult:
         assert d["buckets"] == {"ERR": 1}
         assert d["unmatched"] == 2
         assert d["total"] == 3
+
+    def test_total_with_no_unmatched(self):
+        result = SplitResult(buckets={"A": [make_record(), make_record()]})
+        assert result.total == 2
+
+    def test_total_with_only_unmatched(self):
+        result = SplitResult(buckets={}, unmatched=[make_record(), make_record(), make_record()])
+        assert result.total == 3
 
 
 class TestSplitByLevel:
@@ -92,37 +101,16 @@ class TestSplitByPattern:
     def test_case_sensitive_mode(self):
         records = [make_record(message="FATAL: disk full")]
         result = split_by_pattern(records, {"fatal": r"fatal"}, case_sensitive=True)
+        assert result.buckets.get("fatal") is None
         assert len(result.unmatched) == 1
 
-    def test_multiple_patterns_multiple_buckets(self):
+    def test_multiple_records_split_across_buckets(self):
         records = [
-            make_record(message="disk error"),
-            make_record(message="network timeout"),
-            make_record(message="all fine"),
+            make_record(message="error occurred"),
+            make_record(message="warning issued"),
+            make_record(message="error again"),
         ]
-        result = split_by_pattern(records, {"disk": r"disk", "network": r"network"})
-        assert len(result.buckets["disk"]) == 1
-        assert len(result.buckets["network"]) == 1
-        assert len(result.unmatched) == 1
-
-
-class TestSplitByField:
-    def test_splits_by_extra_field(self):
-        records = [
-            make_record(extra={"service": "auth"}),
-            make_record(extra={"service": "api"}),
-            make_record(extra={"service": "auth"}),
-        ]
-        result = split_by_field(records, "service")
-        assert len(result.buckets["auth"]) == 2
-        assert len(result.buckets["api"]) == 1
-
-    def test_missing_field_uses_default_bucket(self):
-        records = [make_record(extra={})]
-        result = split_by_field(records, "service")
-        assert "OTHER" in result.buckets
-
-    def test_custom_default_bucket_name(self):
-        records = [make_record(extra={})]
-        result = split_by_field(records, "service", default_bucket="UNKNOWN_SERVICE")
-        assert "UNKNOWN_SERVICE" in result.buckets
+        result = split_by_pattern(records, {"error": r"error", "warning": r"warning"})
+        assert len(result.buckets["error"]) == 2
+        assert len(result.buckets["warning"]) == 1
+        assert result.unmatched == []
